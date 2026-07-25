@@ -111,11 +111,11 @@ function PostsSection({
         <NewPostDialog />
       </div>
 
-      {error && (
+      {error ? (
         <div className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
           {error instanceof Error ? error.message : "Failed to load posts"}
         </div>
-      )}
+      ) : null}
 
       {!loading && !error && posts.length === 0 && (
         <div className="rounded-lg border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
