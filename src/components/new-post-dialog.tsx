@@ -14,6 +14,8 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Plus } from "lucide-react";
 import { api } from "@/lib/api-client";
+import { IconInput } from "@/components/icon-input";
+
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 
