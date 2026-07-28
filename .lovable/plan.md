@@ -1,88 +1,80 @@
 
-# Plan: GramStore CMS frontend rebuild
+# Editor overhaul + dark theme
 
-Building fresh in this Lovable workspace against your Spring backend. Nothing from the old GitHub repo is imported.
+## 1. Global dark theme (shared with the post page)
 
-## 1. Backend base URL (configurable, one place)
+- Force `.dark` on the `<html>` element in `src/routes/__root.tsx` (or the shell) so the whole site renders dark.
+- Rewrite the token values in `src/styles.css` using the palette from your `styles.css` upload:
+  - `--background` ≈ `#0b1220`, `--card` ≈ `#0f1a2e`, `--foreground` ≈ `#e6edf7`, `--muted-foreground` ≈ `#98a4b8`, `--primary` ≈ `#82bcff`, `--primary-foreground` on dark blue, `--border` ≈ `#1e2a44`, `--ring` = accent.
+  - Update both `:root` and `.dark` to the same dark values (single theme, no toggle).
+- Add a `md-preview` utility set (already partly there) tuned for this palette so `<h1/h2/h3>`, `code`, `pre`, `blockquote`, `table`, `img` all render the same way as your `post.html`.
 
-- Add `VITE_API_BASE_URL` (default `http://127.0.0.1:8080`) read in a single `src/lib/api-config.ts`.
-- Also expose a small **Settings** dialog (gear icon in navbar) that lets you override the base URL at runtime; the override is stored in `localStorage` and takes precedence over the env default. Change it once, works everywhere.
-- Heads-up: the published Lovable preview is HTTPS, so a browser call to `http://127.0.0.1:8080` from the hosted preview will be blocked by mixed-content. Local `bun dev` works fine. Not something I can fix from the frontend — just noting it.
+## 2. New backend endpoint for body-only markdown
 
-## 2. Routes (TanStack file-based routing)
+- Add a small note in the plan: switch the content fetch from `GET /{username}/post/{slug}` to `GET /cms/post/{slug}/description` (the new endpoint you're adding server-side). Response shape assumed: `{ description: string }` — confirm before build if it's different.
+- Update `src/routes/_authenticated/editor.$slug.tsx` to use that new endpoint via `api()`.
+- Because the body no longer contains YAML, remove any frontmatter-stripping logic — the editor value is just the body verbatim.
+- `PUT /cms/post/updateContent/{slug}` keeps sending `{ content }` (unchanged).
 
-```text
-src/routes/
-  __root.tsx            navbar + <Outlet/>, auth context, react-query provider
-  index.tsx             public welcome page (hero + CTA to Login / Dashboard)
-  login.tsx             login form with "Sign up" toggle inside the same page
-  _authenticated/
-    route.tsx           gate: redirect to /login if no token
-    dashboard.tsx       sidebar of sections (only "Posts" active), post cards grid
-    editor.$slug.tsx    two-tab editor: General | Content
-```
+## 3. Content editor — new component `src/components/content-editor.tsx`
 
-Deleting the placeholder in `src/routes/index.tsx` and replacing with a real welcome page.
+Replaces `markdown-editor.tsx`. Same props (`value`, `onChange`, `onSave`, `saving`) so the parent doesn't change much.
 
-## 3. Top navbar (replaces the "current" left sidebar)
+### Toolbar (single row, wraps on narrow)
 
-- Sticky top bar, brand on the left, right side:
-  - Logged out → **Login** link
-  - Logged in → **Dashboard** link + avatar/username dropdown with **Profile** and **Logout**
-- Settings (gear) button to change backend URL.
-- Driven by auth context so it updates immediately on login/logout.
+Grouped with dividers, using lucide icons + tooltips:
 
-## 4. Auth
+- **Core formatting:** Bold, Italic, Strikethrough, Inline code, H1, H2, H3
+- **Lists & quotes:** Bulleted list, Numbered list, Task list, Blockquote, Horizontal rule
+- **Links / images / code blocks:** Link, Image upload (file picker), Fenced code block, Table
+- **HTML helpers:** `<div>` wrapper, `<details><summary>`, `<br>`
+- **Right side:** Preview toggle, Save button
 
-- `POST /cms/auth/login` and `POST /cms/auth/register` → `{ accessToken }` stored in memory + `localStorage`.
-- Refresh cookie is HttpOnly and handled by the browser; on 401 we call `POST /cms/auth/refresh` once and retry.
-- `GET /cms/auth/check` used on app boot to validate the token silently.
-- All authed fetches send `Authorization: Bearer <accessToken>` and `credentials: 'include'` (for the refresh cookie).
-- A tiny `apiClient` in `src/lib/api-client.ts` centralizes base URL + auth header + refresh-retry.
+Each button wraps the current selection or inserts a stub at the caret (e.g. `**text**`, `# `, `- [ ] `, `\`\`\`lang\n…\n\`\`\``, `| col | col |\n|---|---|\n| … | … |`).
 
-## 5. Dashboard (`/dashboard`)
+### Image insertion — three input paths, one upload flow
 
-- Layout: left column = list of sections (only **Posts** for now, clearly extensible), right column = content pane.
-- Posts pane:
-  - Header shows **"You have N posts"** (count from the list response).
-  - Grid of post cards. Each card = icon (from backend `icon` field) + title. Card click → `/editor/<slug>`.
-- Data source: `GET /{username}/post` (username from the decoded JWT `sub` or `/cms/auth/check` — I'll decode from the JWT client-side, standard for a Spring auth flow).
-- A **New Post** button opens a small dialog (title/description/slug/category/postType/icon/published) → `POST /cms/post/create`, then redirect to the new post's editor.
+All three call `POST /image` (multipart, field name `file`) and get back `{ imageName }`. Inserted markdown = `![<originalName>](<baseUrl>/image/<imageName>)`:
 
-## 6. Editor (`/editor/$slug`)
+1. **Toolbar Image button** — opens file picker.
+2. **Clipboard paste** — `onPaste` on the textarea reads `event.clipboardData.items`, uploads any `image/*` blob, inserts at caret.
+3. **Drag & drop** — `onDrop` on the textarea handles `dataTransfer.files`, uploads sequentially, inserts one after another at the drop position.
 
-Two-tab left sidebar inside the editor route (this is the "left sidebar for the editor" you asked for — separate from the global navbar):
+While an upload is in flight, insert a placeholder `![uploading…]()` at the caret and replace it with the real markdown on success (or remove it on failure with a toast).
 
-- **General tab** — form with all 9 frontmatter fields from `PostFrontMatterRequest`:
-  `title, description, slug, category, postType, icon, actionLabel, actionLink, published (checkbox)`.
-  Save button → `PUT /cms/post/updateFrontMatter/{slug}`.
-- **Content tab** — markdown editor + Preview toggle. `react-markdown` + `remark-gfm` for preview; textarea (with monospace + tab handling) for input. Save button → `PUT /cms/post/updateContent/{slug}`. Loads current markdown via `GET /{username}/post/{slug}` (`PostResponse.markdown`).
-- Delete button in editor header → `DELETE /cms/post/delete/{slug}` with confirm dialog, then back to dashboard.
-- Image upload helper in the content toolbar → `POST /image` (multipart), inserts `![](<baseUrl>/image/<imageName>)` at the cursor.
+### Preview
 
-The General and Content tabs are fully separated screens (as you asked) — General is NOT rendered inside the Content view.
+- Renders with `react-markdown` + `remark-gfm` (already in deps) — **plus** `rehype-raw` so inline HTML (`<div>`, `<details>`, `<br>`, etc.) is rendered instead of shown as text. New dep: `rehype-raw`.
+- Preview container gets the `md-preview` utility so it matches the public post page.
 
-## 7. Welcome page (`/`)
+## 4. Icon field — upload + URL
 
-Simple hero: product name, one-line tagline, two buttons — **Get started** (→ `/login` or `/dashboard` depending on session) and **Learn more** (scrolls to a short features section). No dashboard leakage on the public page.
+In `GeneralTab` inside `src/routes/_authenticated/editor.$slug.tsx`:
 
-## 8. UI / styling
+- Replace the single Icon `<Input>` with a horizontal group:
+  - `<Input>` bound to `fm.icon` (image name or full URL)
+  - `<Button>` "Upload" → file picker → `POST /image` → set `fm.icon` to the returned `imageName`
+  - Small preview thumbnail on the right when `fm.icon` is set — if it looks like a bare name, render `<baseUrl>/image/<name>`, else use it verbatim.
+- Same helper is reused inside the content editor's image-upload flow (extract into `src/lib/upload-image.ts`).
 
-- shadcn components already installed: `button`, `input`, `card`, `dialog`, `tabs`, `dropdown-menu`, `avatar`, `checkbox`, `label`, `textarea`, `sonner` (toasts).
-- Tailwind v4 tokens already in `src/styles.css`; using semantic tokens only (`bg-background`, `text-foreground`, `bg-primary`, etc.).
-- Data fetching via TanStack Query (already in the template).
+## 5. Unsaved-changes guard
 
-## Technical details
+- Track a `dirty` boolean per tab (General / Content) — `true` when the current value diverges from the last-loaded server value; reset on successful save and after a fresh fetch.
+- Combine into `anyDirty = dirtyGeneral || dirtyContent`.
+- Use TanStack Router's `useBlocker({ shouldBlockFn: () => anyDirty, enableBeforeUnload: anyDirty, withResolver: true })` inside `EditorPage`.
+- Render a shadcn `AlertDialog` when `status === "blocked"` with **Discard & leave** (`proceed()`) and **Stay** (`reset()`).
+- `enableBeforeUnload` handles the browser tab-close / hard-refresh prompt automatically.
+- Also guard the in-tab switch (General ↔ Content) — if the leaving tab is dirty, show the same dialog before flipping.
 
-- New/edited files:
-  - `src/lib/api-config.ts`, `src/lib/api-client.ts`, `src/lib/auth-context.tsx`, `src/lib/jwt.ts`
-  - `src/components/nav-bar.tsx`, `src/components/settings-dialog.tsx`, `src/components/post-card.tsx`, `src/components/new-post-dialog.tsx`, `src/components/markdown-editor.tsx`
-  - `src/routes/index.tsx` (rewrite), `src/routes/login.tsx`, `src/routes/_authenticated/route.tsx`, `src/routes/_authenticated/dashboard.tsx`, `src/routes/_authenticated/editor.$slug.tsx`
-  - `src/routes/__root.tsx` (add navbar + AuthProvider + QueryClientProvider already present)
-- Deps to add: `react-markdown`, `remark-gfm`, `jwt-decode`.
-- Auth state flows through router context so `beforeLoad` in `_authenticated/route.tsx` can redirect synchronously.
+## 6. File touch list
 
-## What I'm not doing (out of scope for this pass)
+- New: `src/components/content-editor.tsx`, `src/lib/upload-image.ts`, `src/components/icon-input.tsx` (URL + upload combo).
+- Edit: `src/routes/_authenticated/editor.$slug.tsx` (new endpoint, blocker, icon component, uses `ContentEditor`), `src/styles.css` (palette + preview utilities), `src/routes/__root.tsx` (force dark class).
+- Delete: `src/components/markdown-editor.tsx` (superseded).
+- Add dep: `rehype-raw`.
 
-- No profile edit page beyond a placeholder (backend has no update-profile endpoint shown).
-- No server-side rendering of authenticated routes — dashboard/editor are client-only (`ssr: false` on the `_authenticated` layout) since your backend uses cookie+bearer auth.
+## Open questions
+
+1. The new body endpoint — I'm assuming `GET /cms/post/{slug}/description` returns `{ "description": "…markdown…" }`. If it's a raw string or a different key, tell me and I'll match it.
+2. `POST /image` — I'm reading `imageName` from the JSON response (matches your `ImageUploadResponse`). Confirmed?
+3. For the icon preview thumbnail: if `fm.icon` doesn't look like a URL (no `://`), I'll treat it as an `imageName` and hit `<baseUrl>/image/<name>`. OK?

@@ -1,5 +1,5 @@
-import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { createFileRoute, useNavigate, Link, useBlocker } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -14,7 +14,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { MarkdownEditor } from "@/components/markdown-editor";
+import { ContentEditor } from "@/components/content-editor";
+import { IconInput } from "@/components/icon-input";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -84,31 +85,54 @@ function EditorPage() {
     },
   });
 
+  // New body-only endpoint — returns just the markdown body without YAML frontmatter.
   const contentQuery = useQuery({
-    queryKey: ["post", username, slug],
-    enabled: !!username,
+    queryKey: ["post-markdown", slug],
     queryFn: () =>
       api<{ markdown: string }>(
-        `/${encodeURIComponent(username!)}/post/${encodeURIComponent(slug)}`,
+        `/cms/post/${encodeURIComponent(slug)}/description`,
+        { auth: true },
       ),
   });
 
   const [fm, setFm] = useState<FrontMatter>(EMPTY_FM);
+  const [fmBaseline, setFmBaseline] = useState<FrontMatter>(EMPTY_FM);
   const [content, setContent] = useState("");
+  const [contentBaseline, setContentBaseline] = useState("");
   const [savingFm, setSavingFm] = useState(false);
   const [savingContent, setSavingContent] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [pendingTab, setPendingTab] = useState<Tab | null>(null);
 
   useEffect(() => {
     const found = postsQuery.data?.find((p) => p.slug === slug);
-    if (found) setFm({ ...EMPTY_FM, ...found });
+    if (found) {
+      const merged = { ...EMPTY_FM, ...found };
+      setFm(merged);
+      setFmBaseline(merged);
+    }
   }, [postsQuery.data, slug]);
 
   useEffect(() => {
     if (contentQuery.data?.markdown !== undefined) {
       setContent(contentQuery.data.markdown);
+      setContentBaseline(contentQuery.data.markdown);
     }
   }, [contentQuery.data]);
+
+  const dirtyGeneral = useMemo(
+    () => JSON.stringify(fm) !== JSON.stringify(fmBaseline),
+    [fm, fmBaseline],
+  );
+  const dirtyContent = content !== contentBaseline;
+  const anyDirty = dirtyGeneral || dirtyContent;
+
+  // Router-level blocker (in-app nav + beforeunload)
+  const blocker = useBlocker({
+    shouldBlockFn: () => anyDirty,
+    enableBeforeUnload: () => anyDirty,
+    withResolver: true,
+  });
 
   const saveFrontMatter = async () => {
     setSavingFm(true);
@@ -119,6 +143,7 @@ function EditorPage() {
         body: fm,
       });
       toast.success("Details saved");
+      setFmBaseline(fm);
       await qc.invalidateQueries({ queryKey: ["posts", username] });
       if (fm.slug !== slug) {
         navigate({ to: "/editor/$slug", params: { slug: fm.slug } });
@@ -139,6 +164,7 @@ function EditorPage() {
         body: { content },
       });
       toast.success("Content saved");
+      setContentBaseline(content);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Save failed");
     } finally {
@@ -154,12 +180,36 @@ function EditorPage() {
         auth: true,
       });
       toast.success("Post deleted");
+      setFmBaseline(fm);
+      setContentBaseline(content);
       await qc.invalidateQueries({ queryKey: ["posts", username] });
       navigate({ to: "/dashboard" });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Delete failed");
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const tryChangeTab = (next: Tab) => {
+    if (next === tab) return;
+    const leavingDirty =
+      (tab === "general" && dirtyGeneral) ||
+      (tab === "content" && dirtyContent);
+    if (leavingDirty) {
+      setPendingTab(next);
+    } else {
+      setTab(next);
+    }
+  };
+
+  const confirmTabSwitch = () => {
+    if (pendingTab) {
+      // Discard changes on the leaving tab
+      if (tab === "general") setFm(fmBaseline);
+      else setContent(contentBaseline);
+      setTab(pendingTab);
+      setPendingTab(null);
     }
   };
 
@@ -173,9 +223,12 @@ function EditorPage() {
               Dashboard
             </Link>
           </Button>
-          <h1 className="text-lg font-semibold">
-            {fm.title || slug}
-          </h1>
+          <h1 className="text-lg font-semibold">{fm.title || slug}</h1>
+          {anyDirty && (
+            <span className="rounded-full bg-primary/15 px-2 py-0.5 text-xs text-primary">
+              Unsaved changes
+            </span>
+          )}
         </div>
 
         <AlertDialog>
@@ -207,15 +260,17 @@ function EditorPage() {
           <nav className="flex flex-col gap-1">
             <TabButton
               active={tab === "general"}
-              onClick={() => setTab("general")}
+              onClick={() => tryChangeTab("general")}
               icon={<Settings2 className="h-4 w-4" />}
               label="General"
+              dirty={dirtyGeneral}
             />
             <TabButton
               active={tab === "content"}
-              onClick={() => setTab("content")}
+              onClick={() => tryChangeTab("content")}
               icon={<FileText className="h-4 w-4" />}
               label="Content"
+              dirty={dirtyContent}
             />
           </nav>
         </aside>
@@ -230,7 +285,7 @@ function EditorPage() {
               loading={postsQuery.isLoading}
             />
           ) : (
-            <MarkdownEditor
+            <ContentEditor
               value={content}
               onChange={setContent}
               onSave={saveContent}
@@ -239,6 +294,58 @@ function EditorPage() {
           )}
         </div>
       </div>
+
+      {/* Router-level unsaved-changes guard */}
+      <AlertDialog
+        open={blocker.status === "blocked"}
+        onOpenChange={(open) => {
+          if (!open && blocker.status === "blocked") blocker.reset();
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You have unsaved edits. Leaving now will lose them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => blocker.status === "blocked" && blocker.reset()}
+            >
+              Stay
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => blocker.status === "blocked" && blocker.proceed()}
+            >
+              Discard & leave
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Tab-switch guard */}
+      <AlertDialog
+        open={pendingTab !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingTab(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard changes on this tab?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Switching tabs without saving will discard your edits here.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Stay</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmTabSwitch}>
+              Discard & switch
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -248,11 +355,13 @@ function TabButton({
   onClick,
   icon,
   label,
+  dirty,
 }: {
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
+  dirty?: boolean;
 }) {
   return (
     <button
@@ -264,7 +373,8 @@ function TabButton({
       }`}
     >
       {icon}
-      {label}
+      <span className="flex-1 text-left">{label}</span>
+      {dirty && <span className="h-1.5 w-1.5 rounded-full bg-primary" />}
     </button>
   );
 }
@@ -296,16 +406,10 @@ function GeneralTab({
       </div>
       <div className="grid flex-1 gap-4 overflow-auto p-4 md:grid-cols-2">
         <FormField label="Title">
-          <Input
-            value={fm.title}
-            onChange={(e) => set("title", e.target.value)}
-          />
+          <Input value={fm.title} onChange={(e) => set("title", e.target.value)} />
         </FormField>
         <FormField label="Slug">
-          <Input
-            value={fm.slug}
-            onChange={(e) => set("slug", e.target.value)}
-          />
+          <Input value={fm.slug} onChange={(e) => set("slug", e.target.value)} />
         </FormField>
         <FormField label="Description" className="md:col-span-2">
           <Input
@@ -314,22 +418,13 @@ function GeneralTab({
           />
         </FormField>
         <FormField label="Category">
-          <Input
-            value={fm.category}
-            onChange={(e) => set("category", e.target.value)}
-          />
+          <Input value={fm.category} onChange={(e) => set("category", e.target.value)} />
         </FormField>
         <FormField label="Post type">
-          <Input
-            value={fm.postType}
-            onChange={(e) => set("postType", e.target.value)}
-          />
+          <Input value={fm.postType} onChange={(e) => set("postType", e.target.value)} />
         </FormField>
-        <FormField label="Icon (image name)">
-          <Input
-            value={fm.icon}
-            onChange={(e) => set("icon", e.target.value)}
-          />
+        <FormField label="Icon" className="md:col-span-2">
+          <IconInput value={fm.icon} onChange={(v) => set("icon", v)} />
         </FormField>
         <FormField label="Action label">
           <Input
@@ -337,7 +432,7 @@ function GeneralTab({
             onChange={(e) => set("actionLabel", e.target.value)}
           />
         </FormField>
-        <FormField label="Action link" className="md:col-span-2">
+        <FormField label="Action link">
           <Input
             value={fm.actionLink}
             onChange={(e) => set("actionLink", e.target.value)}
