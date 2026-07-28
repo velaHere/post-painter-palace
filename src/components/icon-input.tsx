@@ -54,7 +54,7 @@ export function IconInput({ value, onChange }: Props) {
           onChange(e.target.value);
           setErrored(false);
         }}
-        placeholder="image name or full URL"
+        placeholder="image URL"
         className="flex-1"
       />
       <Button
