@@ -7,14 +7,18 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   api,
   getAccessToken,
   setAccessToken,
   refreshToken,
   registerLogoutHandler,
+  serverLogout,
+  isTokenStale,
 } from "./api-client";
-import { getUsernameFromToken, isTokenExpired } from "./jwt";
+import { getUsernameFromToken } from "./jwt";
 
 interface AuthState {
   token: string | null;
@@ -27,20 +31,23 @@ interface AuthState {
     email: string,
     password: string,
   ) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
+
 
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const existing = getAccessToken();
-      if (existing && !isTokenExpired(existing)) {
+      if (existing && !isTokenStale(existing)) {
         if (!cancelled) setToken(existing);
       } else {
         const refreshed = await refreshToken();
@@ -80,14 +87,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [applyToken],
   );
 
-  const logout = useCallback(() => {
-      applyToken(null);
-      window.location.href = "/login";
-  }, [applyToken]);
+  const logout = useCallback(async () => {
+    // Tell the server first (needs the bearer + cookie), then clear locally.
+    await serverLogout();
+    applyToken(null);
+    await queryClient.cancelQueries();
+    queryClient.clear();
+    navigate({ to: "/login", replace: true });
+  }, [applyToken, navigate, queryClient]);
 
   useEffect(() => {
-      registerLogoutHandler(logout);
-  }, [logout]);
+    registerLogoutHandler(() => {
+      // Session already invalid — skip the server call, just clear and bounce.
+      applyToken(null);
+      queryClient.clear();
+      navigate({ to: "/login", replace: true });
+    });
+  }, [applyToken, navigate, queryClient]);
+
+
 
   const value = useMemo<AuthState>(
     () => ({

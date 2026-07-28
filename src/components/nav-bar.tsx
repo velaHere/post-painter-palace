@@ -1,4 +1,4 @@
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { LayoutDashboard, LogOut, User } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
@@ -15,14 +15,13 @@ import { SettingsDialog } from "./settings-dialog";
 
 export function NavBar() {
   const { isAuthenticated, username, logout } = useAuth();
-  const navigate = useNavigate();
 
   const initials = (username ?? "?").slice(0, 2).toUpperCase();
 
   const handleLogout = () => {
-    logout();
-    navigate({ to: "/" });
+    void logout();
   };
+
 
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur">
