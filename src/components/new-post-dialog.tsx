@@ -112,12 +112,10 @@ export function NewPostDialog() {
               />
             </Field>
           </div>
-          <Field label="Icon (image name)">
-            <Input
-              value={form.icon}
-              onChange={(e) => set("icon", e.target.value)}
-            />
+          <Field label="Icon">
+            <IconInput value={form.icon} onChange={(v) => set("icon", v)} />
           </Field>
+
           <div className="flex items-center gap-2 pt-1">
             <Checkbox
               id="published"
