@@ -18,8 +18,8 @@ export function IconInput({ value, onChange }: Props) {
   const onPick = async (file: File) => {
     setUploading(true);
     try {
-      const { imageName } = await uploadImage(file);
-      onChange(imageName);
+      const { url } = await uploadImage(file);
+      onChange(url);
       setErrored(false);
       toast.success("Icon uploaded");
     } catch (err) {
@@ -28,6 +28,7 @@ export function IconInput({ value, onChange }: Props) {
       setUploading(false);
     }
   };
+
 
   const src = value ? resolveImageSrc(value) : "";
 
