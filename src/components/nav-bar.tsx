@@ -14,7 +14,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SettingsDialog } from "./settings-dialog";
 
 export function NavBar() {
-  const { isAuthenticated, username, logout } = useAuth();
+  const { isAuthenticated, isLoading, username, logout } = useAuth();
 
   const initials = (username ?? "?").slice(0, 2).toUpperCase();
 
@@ -33,7 +33,12 @@ export function NavBar() {
 
         <nav className="flex items-center gap-2">
           <SettingsDialog />
-          {isAuthenticated ? (
+          {isLoading ? (
+            <div
+              aria-hidden
+              className="h-8 w-24 animate-pulse rounded-full bg-muted"
+            />
+          ) : isAuthenticated ? (
             <>
               <Button asChild variant="ghost" size="sm">
                 <Link to="/dashboard">

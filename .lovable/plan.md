@@ -1,68 +1,43 @@
-## What we're fixing
+## 1. Fix the "logged out → flash → logged in" glitch
 
-1. Logout doesn't actually log you out (token + refresh cookie survive)
-2. Random "unauthorized" loops where neither the access token nor refresh works
-3. Icon field in the General editor stores a bare image name instead of a full URL
-4. No icon upload button in the "Create new post" dialog
-5. Three feature cards at the bottom of the home page
+**Confirmed cause (from reading the code):** `AuthProvider` (`src/lib/auth-context.tsx`) always starts with `token = null`, `isLoading = true`, and only resolves the session inside a `useEffect`. Nothing that renders during that window looks at `isLoading`:
 
----
+- `NavBar` reads only `isAuthenticated`, so it paints the **Login** button first, then swaps to Dashboard + avatar.
+- `src/routes/index.tsx` picks its CTA target from `isAuthenticated`, so the button briefly points at `/login`.
+- The login route redirects to `/dashboard` once the session resolves — that's the "instantly redirects me to the dashboard" part.
 
-## 1. Logout
+**Changes:**
 
-Currently `logout()` only clears localStorage and does `window.location.href = "/login"` — the backend refresh cookie stays alive, so the next visit silently re-authenticates.
+1. **Hydrate synchronously when possible** — in `AuthProvider`, initialise state from `getAccessToken()` in the `useState` initialiser (client-side only). If a stored token exists and is not stale, start as authenticated with `isLoading = false`; no network round-trip, no flash. Only fall into the async `refreshToken()` path when there is no usable stored token.
+2. **Add a resolving state to the nav** — while `isLoading` is true, `NavBar` renders a neutral placeholder (a small skeleton where the account control goes) instead of the Login button, so the signed-out state is never shown to a signed-in user.
+3. **Home page CTA** — render the button in a disabled/neutral state while `isLoading`, then settle into "Go to dashboard" or "Get started". Avoids the flicker and the wrong link target if clicked fast.
+4. **Login route** — wait for `isLoading` to finish before deciding to redirect, so a signed-in user landing on `/login` goes straight through without rendering the form first.
+5. **Smoother transitions** — subtle fade/opacity transition on the nav auth area so any remaining resolve step (cold load with no stored token) reads as intentional rather than a glitch.
 
-New flow in `src/lib/auth-context.tsx`:
-- `POST /cms/auth/logout` with `credentials: "include"` and the current bearer token, ignoring failures (network/401 must not block sign-out)
-- Clear the access token from localStorage and React state
-- Clear the React Query cache so no protected data survives
-- Navigate to `/login` via the router (no full page reload)
+Net effect: signed-in users with a valid stored token see the correct header on first paint; users needing a refresh see a stable placeholder instead of a wrong state.
 
-**What I need from your backend:** on `POST /cms/auth/logout`, invalidate the stored refresh token/stimulus for the user and return a `Set-Cookie` that expires the cookie with the *exact same* attributes it was set with (`path=/cms/auth/refresh`, `httpOnly`, `secure`, same `sameSite`, `maxAge=0`). A cookie deleted with a different path is ignored by the browser. Response body can be empty with `204`, or `{"success": true}` with `200` — I'll accept both.
+## 2. YouTube "Video unavailable"
 
-## 2. The unauthorized / refresh-never-works root cause
+Your ChatGPT write-up has one invalid data point: the **standalone HTML opened from disk (`file://`) is expected to fail**. YouTube's embed rejects a `null` origin, and it fails with exactly "Video unavailable / Watch on YouTube". So that test does not prove the problem is outside the app — it proves nothing either way.
 
-Your cookie is set as:
+Real remaining suspects, in order:
+- Edge **Tracking Prevention (Balanced/Strict)** blocking storage for youtube.com — this *does* produce "Video unavailable" for embeds while youtube.com itself works. The console message you saw is the tell.
+- Network/DNS filtering that allows youtube.com but blocks the embed endpoints.
+- The app's own CSP header — `vite.config.ts` currently sets `frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com`. That allows the frame, but the embed player also needs its own subresources; worth confirming no `Permissions-Policy` or referrer stripping is in play.
 
-```text
-sameSite("Lax"), secure(true), path("/cms/auth/refresh")
-```
+**What I'll do in the code:**
 
-Frontend runs on `:3000`, API on `:8080`. Different ports = **cross-site** for cookie purposes, and a `SameSite=Lax` cookie is **never sent on a cross-site `fetch()`**. So `POST /cms/auth/refresh` arrives with no cookie → 401 → the client wipes the token → every following request is unauthorized. That exactly matches "the token vanished from localStorage and refresh didn't work either".
+1. **Verify it in a clean browser** — drive a headless Chromium against the preview with the iframe rendered, capture console + network for the embed, and screenshot the player. That tells us definitively whether the app serves a working embed or whether it's your Edge profile/network.
+2. **Harden the preview renderer** (`src/components/content-editor.tsx` and the published post preview): add a `components` override for `iframe` in ReactMarkdown that
+   - normalises `youtube.com/watch?v=` and `youtu.be` URLs to `/embed/`,
+   - sets `referrerPolicy="strict-origin-when-cross-origin"`, `loading="lazy"`, `allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"`, `allowFullScreen`,
+   - wraps it in a responsive 16:9 container so embeds scale on mobile instead of overflowing at a fixed 560×315.
+3. **Confirm the CSP** in `vite.config.ts` covers both youtube hosts (it does) and note if anything else needs adding once the headless test reports back.
 
-**Backend change required (I can't fix this from the frontend):**
-- `sameSite("None")` + `secure(true)` on the refresh cookie
-- CORS: `allowCredentials(true)` and an explicit allowed origin list (no `*`), with `Authorization` in allowed headers and `OPTIONS` permitted
-
-**Frontend changes I'll make to make the flow robust:**
-- Proactively refresh when the access token is expired *or* within 30s of expiry, before firing the request — instead of waiting for a 401
-- Keep single-flight refresh, but queue concurrent callers correctly (today a second caller can get a stale promise result)
-- Only clear the token and force logout when the refresh endpoint returns a real 401/403. On a network error or 5xx, keep the token and surface the error — this is what wiped your session mid-testing
-- Retry the original request exactly once after a successful refresh; if it 401s again, then log out
-- Store the token under a versioned key and validate it parses as a JWT on load; a corrupt value gets dropped instead of being sent as a malformed bearer
-- Add a dev-only console trace of the auth flow (request → 401 → refresh → retry) so any future breakage is visible
-
-## 3. Images: always full URLs
-
-`uploadImage` returns `{ imageName, url }`; the General tab stores `imageName`, the markdown editor stores the full URL. Unifying on full URL:
-- `uploadImage` returns the absolute URL built from the configured API base + `/image/{imageName}`
-- `IconInput` sets the full URL into the field on upload, so upload and paste-a-URL behave identically, and the value saved to the backend is the full URL
-- `resolveImageSrc` stays as a safety net for existing posts that still hold a bare name
-
-## 4. Icon upload in "Create new post"
-
-Replace the plain `Input` for `icon` in `src/components/new-post-dialog.tsx` with the same `IconInput` component used in the General tab — thumbnail preview, upload button, and URL paste.
-
-## 5. Home page
-
-Remove the three feature cards (Markdown first / Fast dashboard / Image uploads), the `#features` section, the `FeatureCard` helper and its now-unused icon imports. The "Learn more" button that pointed at `#features` goes too, leaving a single primary CTA.
-
----
+If the headless test plays the video fine, the fix on your side is Edge settings (turn Tracking Prevention off for the site, or allow third-party cookies for youtube.com) — I'll report exactly what I observed rather than guessing.
 
 ## Technical notes
 
-Files touched: `src/lib/api-client.ts`, `src/lib/auth-context.tsx`, `src/lib/upload-image.ts`, `src/components/icon-input.tsx`, `src/components/new-post-dialog.tsx`, `src/routes/index.tsx`.
-
-Your GitHub repo is synced into this project, so I'll build on whatever is currently on disk here — if a commit hasn't landed yet, say so before I start.
-
-Two backend items are on you (frontend can't work around either): the `SameSite=None; Secure` refresh cookie with credentialed CORS, and the logout endpoint expiring the cookie on the same path.
+- Files touched: `src/lib/auth-context.tsx`, `src/components/nav-bar.tsx`, `src/routes/index.tsx`, `src/routes/login.tsx`, `src/components/content-editor.tsx`, possibly `src/styles.css` (responsive embed wrapper) and `vite.config.ts` (CSP only if the test shows it's needed).
+- No backend or API-contract changes; the token storage key and refresh flow stay as-is.
+- The `_authenticated` layout already gates on `isLoading`, so protected routes need no change.

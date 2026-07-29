@@ -24,7 +24,7 @@ export const Route = createFileRoute("/")({
 });
 
 function Welcome() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
   return (
     <div>
       <section className="mx-auto max-w-4xl px-4 py-24 text-center">
@@ -37,15 +37,23 @@ function Welcome() {
           dashboard, no clutter.
         </p>
         <div className="mt-8 flex justify-center gap-3">
-          <Button asChild size="lg">
-            <Link to={isAuthenticated ? "/dashboard" : "/login"}>
-              {isAuthenticated ? "Go to dashboard" : "Get started"}
-              <ArrowRight className="ml-2 h-4 w-4" />
-            </Link>
-          </Button>
+          {isLoading ? (
+            <div
+              aria-hidden
+              className="h-11 w-44 animate-pulse rounded-md bg-muted"
+            />
+          ) : (
+            <Button asChild size="lg" className="transition-opacity">
+              <Link to={isAuthenticated ? "/dashboard" : "/login"}>
+                {isAuthenticated ? "Go to dashboard" : "Get started"}
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Link>
+            </Button>
+          )}
         </div>
       </section>
     </div>
   );
 }
+
 
