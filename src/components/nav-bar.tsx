@@ -14,7 +14,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SettingsDialog } from "./settings-dialog";
 
 export function NavBar() {
-  const { isAuthenticated, username, logout } = useAuth();
+  const { isAuthenticated, isLoading, username, logout } = useAuth();
 
   const initials = (username ?? "?").slice(0, 2).toUpperCase();
 
