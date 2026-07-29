@@ -32,9 +32,20 @@ function LoginPage() {
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      navigate({ to: "/dashboard" });
+      navigate({ to: "/dashboard", replace: true });
     }
   }, [isAuthenticated, isLoading, navigate]);
+
+  // Don't flash the sign-in form while the session is still resolving, or
+  // once we know the user is signed in and about to be redirected.
+  if (isLoading || isAuthenticated) {
+    return (
+      <div className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center text-sm text-muted-foreground">
+        Loading…
+      </div>
+    );
+  }
+
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
