@@ -1,8 +1,7 @@
 import { useRef, useState, type ClipboardEvent, type DragEvent } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeRaw from "rehype-raw";
+import { MarkdownPreview } from "@/components/markdown-preview";
 import { Button } from "@/components/ui/button";
+
 import {
   Bold,
   Italic,
