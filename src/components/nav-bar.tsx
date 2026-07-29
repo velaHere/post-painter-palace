@@ -33,7 +33,12 @@ export function NavBar() {
 
         <nav className="flex items-center gap-2">
           <SettingsDialog />
-          {isAuthenticated ? (
+          {isLoading ? (
+            <div
+              aria-hidden
+              className="h-8 w-24 animate-pulse rounded-full bg-muted"
+            />
+          ) : isAuthenticated ? (
             <>
               <Button asChild variant="ghost" size="sm">
                 <Link to="/dashboard">
