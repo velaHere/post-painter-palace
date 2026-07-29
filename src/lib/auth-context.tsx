@@ -38,28 +38,43 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+/** Layout effect on the client, no-op during SSR (avoids the warning). */
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect;
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
+  // Synchronous hydration: if a usable token is already in storage, adopt it
+  // *before* the browser paints so the UI never flashes a signed-out state.
+  useIsomorphicLayoutEffect(() => {
+    const existing = getAccessToken();
+    if (existing && !isTokenStale(existing)) {
+      setToken(existing);
+      setIsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const existing = getAccessToken();
-      if (existing && !isTokenStale(existing)) {
-        if (!cancelled) setToken(existing);
-      } else {
-        const refreshed = await refreshToken();
-        if (!cancelled) setToken(refreshed);
+      // Already adopted synchronously above — nothing to do.
+      if (existing && !isTokenStale(existing)) return;
+      const refreshed = await refreshToken();
+      if (!cancelled) {
+        setToken(refreshed);
+        setIsLoading(false);
       }
-      if (!cancelled) setIsLoading(false);
     })();
     return () => {
       cancelled = true;
     };
   }, []);
+
 
   const applyToken = useCallback((newToken: string | null) => {
     setAccessToken(newToken);
