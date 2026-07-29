@@ -10,6 +10,11 @@ export default defineConfig({
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
     // nitro/vite builds from this
-    server: { entry: "server" },
+    server: {
+       entry: "server" ,
+       headers: {
+        'Content-Security-Policy': "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com"
+      }
+      },
   },
 });
