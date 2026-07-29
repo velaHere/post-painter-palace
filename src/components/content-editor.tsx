@@ -278,10 +278,9 @@ export function ContentEditor({ value, onChange, onSave, saving }: Props) {
       <div className="flex-1 overflow-hidden">
         {preview ? (
           <div className="md-preview h-full overflow-auto p-6">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
-              {value || "*Nothing to preview.*"}
-            </ReactMarkdown>
+            <MarkdownPreview value={value} />
           </div>
+
         ) : (
           <textarea
             ref={textareaRef}
