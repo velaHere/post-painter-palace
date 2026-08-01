@@ -19,6 +19,7 @@ import {
   serverLogout,
   isTokenStale,
 } from "./api-client";
+import { sessionSocket } from "./session-socket";
 import { getUsernameFromToken } from "./jwt";
 
 interface AuthState {
@@ -75,6 +76,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // One session socket per JWT: connect when we have a token, close when we
+  // don't. A refresh initiated by the socket itself feeds the new token back.
+  useEffect(() => {
+    sessionSocket.setTokenListener((fresh) => setToken(fresh));
+    return () => sessionSocket.setTokenListener(null);
+  }, []);
+
+  useEffect(() => {
+    if (isLoading) return;
+    if (token) sessionSocket.connect(token);
+    else sessionSocket.close();
+  }, [token, isLoading]);
+
 
   const applyToken = useCallback((newToken: string | null) => {
     setAccessToken(newToken);
@@ -106,6 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     // Tell the server first (needs the bearer + cookie), then clear locally.
     await serverLogout();
+    sessionSocket.close();
     applyToken(null);
     await queryClient.cancelQueries();
     queryClient.clear();
@@ -115,7 +130,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     registerLogoutHandler(() => {
       // Session already invalid — skip the server call, just clear and bounce.
+      sessionSocket.close();
       applyToken(null);
+      void queryClient.cancelQueries();
       queryClient.clear();
       navigate({ to: "/login", replace: true });
     });

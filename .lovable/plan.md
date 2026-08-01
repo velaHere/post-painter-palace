@@ -1,43 +1,35 @@
-## 1. Fix the "logged out → flash → logged in" glitch
+## What changes
 
-**Confirmed cause (from reading the code):** `AuthProvider` (`src/lib/auth-context.tsx`) always starts with `token = null`, `isLoading = true`, and only resolves the session inside a `useEffect`. Nothing that renders during that window looks at `isLoading`:
+### 1. Fix the refresh call to match the backend
+`src/lib/api-client.ts` currently calls `POST /cms/auth/refresh`. The spec says `GET /cms/auth/refresh` (no body, cookie `stimulus` sent automatically). Switch the method to GET, keep `credentials: "include"`, keep the existing single-flight + skew logic (30s proactive refresh, 401/403 clears session, network/5xx keeps token).
 
-- `NavBar` reads only `isAuthenticated`, so it paints the **Login** button first, then swaps to Dashboard + avatar.
-- `src/routes/index.tsx` picks its CTA target from `isAuthenticated`, so the button briefly points at `/login`.
-- The login route redirects to `/dashboard` once the session resolves — that's the "instantly redirects me to the dashboard" part.
+Everything else in the REST flow already matches the spec: bearer header on protected calls, 401 → refresh → retry → logout on failure, `POST /cms/auth/logout` with bearer.
 
-**Changes:**
+### 2. New WebSocket session client
+New file `src/lib/session-socket.ts` — a small singleton managing one socket:
 
-1. **Hydrate synchronously when possible** — in `AuthProvider`, initialise state from `getAccessToken()` in the `useState` initialiser (client-side only). If a stored token exists and is not stale, start as authenticated with `isLoading = false`; no network round-trip, no flash. Only fall into the async `refreshToken()` path when there is no usable stored token.
-2. **Add a resolving state to the nav** — while `isLoading` is true, `NavBar` renders a neutral placeholder (a small skeleton where the account control goes) instead of the Login button, so the signed-out state is never shown to a signed-in user.
-3. **Home page CTA** — render the button in a disabled/neutral state while `isLoading`, then settle into "Go to dashboard" or "Get started". Avoids the flicker and the wrong link target if clicked fast.
-4. **Login route** — wait for `isLoading` to finish before deciding to redirect, so a signed-in user landing on `/login` goes straight through without rendering the form first.
-5. **Smoother transitions** — subtle fade/opacity transition on the nav auth area so any remaining resolve step (cold load with no stored token) reads as intentional rather than a glitch.
+- URL derived from the configured API base URL (`src/lib/api-config.ts`): `http://` → `ws://`, `https://` → `wss://`, path `/ws`. No new config surface.
+- `connect(token)` opens the socket and, in `onopen`, immediately sends `{"type":"AUTH","token":"<JWT>"}` (well inside the server's 5s window).
+- Message handling:
+  - `AUTH_SUCCESS` → mark authenticated, reset backoff.
+  - `AUTH_FAILED` → do **not** log out. Call the shared refresh once; on success store new JWT and reconnect + re-AUTH; on failure clear JWT and go to login.
+  - `LOGOUT` → close socket, clear JWT/auth state, clear query cache, redirect to `/login`, and **no** refresh attempt. Show the server's message as a toast ("Your session has expired." / logged in elsewhere).
+  - Unknown types → ignored, never throw.
+- Unexpected close (network drop, not LOGOUT and not an in-progress auth-failure retry) → reconnect with exponential backoff (1s → 2s → 4s → 8s, capped ~15s) plus a reconnect when the tab regains focus/online.
+- Guard against duplicate sockets (React strict-mode double effects, repeated logins).
 
-Net effect: signed-in users with a valid stored token see the correct header on first paint; users needing a refresh see a stable placeholder instead of a wrong state.
+### 3. Wire it into auth state
+`src/lib/auth-context.tsx`:
+- After the token resolves (synchronous hydration path or refresh path) and after `login`/`register`, call `sessionSocket.connect(token)`.
+- On `logout` (and on the forced-logout handler), `sessionSocket.close()` before clearing local state.
+- If no token exists on startup, do not connect.
+- When a refresh produces a new JWT (either from REST or from the socket path), the socket reconnects with the new token.
+- Expose the forced-logout path so the socket's `LOGOUT` handler reuses the exact same teardown as the existing `registerLogoutHandler` (cancel queries → clear cache → clear token → navigate `/login` replace). No second, divergent logout implementation.
 
-## 2. YouTube "Video unavailable"
-
-Your ChatGPT write-up has one invalid data point: the **standalone HTML opened from disk (`file://`) is expected to fail**. YouTube's embed rejects a `null` origin, and it fails with exactly "Video unavailable / Watch on YouTube". So that test does not prove the problem is outside the app — it proves nothing either way.
-
-Real remaining suspects, in order:
-- Edge **Tracking Prevention (Balanced/Strict)** blocking storage for youtube.com — this *does* produce "Video unavailable" for embeds while youtube.com itself works. The console message you saw is the tell.
-- Network/DNS filtering that allows youtube.com but blocks the embed endpoints.
-- The app's own CSP header — `vite.config.ts` currently sets `frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com`. That allows the frame, but the embed player also needs its own subresources; worth confirming no `Permissions-Policy` or referrer stripping is in play.
-
-**What I'll do in the code:**
-
-1. **Verify it in a clean browser** — drive a headless Chromium against the preview with the iframe rendered, capture console + network for the embed, and screenshot the player. That tells us definitively whether the app serves a working embed or whether it's your Edge profile/network.
-2. **Harden the preview renderer** (`src/components/content-editor.tsx` and the published post preview): add a `components` override for `iframe` in ReactMarkdown that
-   - normalises `youtube.com/watch?v=` and `youtu.be` URLs to `/embed/`,
-   - sets `referrerPolicy="strict-origin-when-cross-origin"`, `loading="lazy"`, `allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"`, `allowFullScreen`,
-   - wraps it in a responsive 16:9 container so embeds scale on mobile instead of overflowing at a fixed 560×315.
-3. **Confirm the CSP** in `vite.config.ts` covers both youtube hosts (it does) and note if anything else needs adding once the headless test reports back.
-
-If the headless test plays the video fine, the fix on your side is Edge settings (turn Tracking Prevention off for the site, or allow third-party cookies for youtube.com) — I'll report exactly what I observed rather than guessing.
+This keeps the flash-free hydration behaviour already in place; the socket connects after paint and never gates rendering.
 
 ## Technical notes
-
-- Files touched: `src/lib/auth-context.tsx`, `src/components/nav-bar.tsx`, `src/routes/index.tsx`, `src/routes/login.tsx`, `src/components/content-editor.tsx`, possibly `src/styles.css` (responsive embed wrapper) and `vite.config.ts` (CSP only if the test shows it's needed).
-- No backend or API-contract changes; the token storage key and refresh flow stay as-is.
-- The `_authenticated` layout already gates on `isLoading`, so protected routes need no change.
+- Files touched: `src/lib/api-client.ts` (GET refresh + export a reusable refresh for the socket), `src/lib/auth-context.tsx` (lifecycle wiring), new `src/lib/session-socket.ts`.
+- Refresh is shared: the socket calls the same single-flight `refreshToken()`, so a REST 401 and a WS `AUTH_FAILED` at the same moment produce exactly one refresh request.
+- No UI changes beyond a toast on forced logout.
+- Local dev caveat: `ws://127.0.0.1:8080/ws` works from the preview over http; if the preview is served over https, the backend must be reachable over `wss://` or the browser will block the socket. Worth confirming your dev setup once wired.
