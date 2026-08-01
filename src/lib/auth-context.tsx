@@ -120,6 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     // Tell the server first (needs the bearer + cookie), then clear locally.
     await serverLogout();
+    sessionSocket.close();
     applyToken(null);
     await queryClient.cancelQueries();
     queryClient.clear();
@@ -129,7 +130,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     registerLogoutHandler(() => {
       // Session already invalid — skip the server call, just clear and bounce.
+      sessionSocket.close();
       applyToken(null);
+      void queryClient.cancelQueries();
       queryClient.clear();
       navigate({ to: "/login", replace: true });
     });
