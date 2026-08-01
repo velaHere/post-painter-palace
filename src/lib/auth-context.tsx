@@ -19,6 +19,7 @@ import {
   serverLogout,
   isTokenStale,
 } from "./api-client";
+import { sessionSocket } from "./session-socket";
 import { getUsernameFromToken } from "./jwt";
 
 interface AuthState {
