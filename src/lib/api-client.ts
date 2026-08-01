@@ -120,7 +120,7 @@ async function refreshToken(): Promise<string | null> {
     try {
       trace("refresh →");
       const res = await doFetch("/cms/auth/refresh", {
-        method: "POST",
+        method: "GET",
         skipRefresh: true,
       });
 
