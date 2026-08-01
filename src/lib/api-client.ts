@@ -19,6 +19,12 @@ export function registerLogoutHandler(handler: () => void) {
   logoutHandler = handler;
 }
 
+/** Force the shared logout teardown (used by the session socket on LOGOUT). */
+export function forceLogout() {
+  setAccessToken(null);
+  logoutHandler?.();
+}
+
 function looksLikeJwt(token: string | null): boolean {
   return !!token && token.split(".").length === 3 && !!decodeToken(token);
 }
