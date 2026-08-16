@@ -238,7 +238,15 @@ export async function api<T = unknown>(
     } else if (typeof payload === "string" && payload) {
       message = payload;
     }
+    // The backend's EmailVerificationFilter answers 403 with an
+    // "Email verification required" body — that's not a dead session.
+    if (res.status === 403 && /verification/i.test(message)) {
+      trace("email verification required for", path);
+      lastVerified = false;
+      verificationHandler?.();
+    }
     throw new ApiError(res.status, message, payload);
+
   }
 
   return payload as T;
