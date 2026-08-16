@@ -16,25 +16,38 @@ import {
   setAccessToken,
   refreshToken,
   registerLogoutHandler,
+  registerVerificationRequiredHandler,
   serverLogout,
   isTokenStale,
+  getLastVerified,
+  setLastVerified,
 } from "./api-client";
 import { sessionSocket } from "./session-socket";
 import { getUsernameFromToken } from "./jwt";
+
+interface AuthResponse {
+  accessToken: string;
+  verified: boolean;
+}
 
 interface AuthState {
   token: string | null;
   username: string | null;
   isAuthenticated: boolean;
+  /** null while unknown (e.g. hydrated from storage before the first refresh). */
+  verified: boolean | null;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<boolean>;
   register: (
     username: string,
     email: string,
     password: string,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
+  verifyOtp: (code: string) => Promise<void>;
+  resendOtp: () => Promise<void>;
   logout: () => Promise<void>;
 }
+
 
 
 const AuthContext = createContext<AuthState | null>(null);
