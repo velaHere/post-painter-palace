@@ -16,25 +16,38 @@ import {
   setAccessToken,
   refreshToken,
   registerLogoutHandler,
+  registerVerificationRequiredHandler,
   serverLogout,
   isTokenStale,
+  getLastVerified,
+  setLastVerified,
 } from "./api-client";
 import { sessionSocket } from "./session-socket";
 import { getUsernameFromToken } from "./jwt";
+
+interface AuthResponse {
+  accessToken: string;
+  verified: boolean;
+}
 
 interface AuthState {
   token: string | null;
   username: string | null;
   isAuthenticated: boolean;
+  /** null while unknown (e.g. hydrated from storage before the first refresh). */
+  verified: boolean | null;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<boolean>;
   register: (
     username: string,
     email: string,
     password: string,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
+  verifyOtp: (code: string) => Promise<void>;
+  resendOtp: () => Promise<void>;
   logout: () => Promise<void>;
 }
+
 
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -45,6 +58,7 @@ const useIsomorphicLayoutEffect =
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
+  const [verified, setVerified] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -55,6 +69,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const existing = getAccessToken();
     if (existing && !isTokenStale(existing)) {
       setToken(existing);
+      setVerified(getLastVerified());
       setIsLoading(false);
     }
   }, []);
@@ -68,6 +83,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const refreshed = await refreshToken();
       if (!cancelled) {
         setToken(refreshed);
+        setVerified(getLastVerified());
         setIsLoading(false);
       }
     })();
@@ -79,7 +95,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // One session socket per JWT: connect when we have a token, close when we
   // don't. A refresh initiated by the socket itself feeds the new token back.
   useEffect(() => {
-    sessionSocket.setTokenListener((fresh) => setToken(fresh));
+    sessionSocket.setTokenListener((fresh) => {
+      setToken(fresh);
+      setVerified(getLastVerified());
+    });
     return () => sessionSocket.setTokenListener(null);
   }, []);
 
@@ -90,32 +109,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [token, isLoading]);
 
 
-  const applyToken = useCallback((newToken: string | null) => {
-    setAccessToken(newToken);
-    setToken(newToken);
-  }, []);
+  const applyToken = useCallback(
+    (newToken: string | null, isVerified: boolean | null = null) => {
+      setAccessToken(newToken);
+      setLastVerified(isVerified);
+      setToken(newToken);
+      setVerified(isVerified);
+    },
+    [],
+  );
 
   const login = useCallback(
     async (email: string, password: string) => {
-      const res = await api<{ accessToken: string }>("/cms/auth/login", {
+      const res = await api<AuthResponse>("/cms/auth/login", {
         method: "POST",
         body: { email, password },
       });
-      applyToken(res.accessToken);
+      applyToken(res.accessToken, !!res.verified);
+      return !!res.verified;
     },
     [applyToken],
   );
 
   const register = useCallback(
     async (username: string, email: string, password: string) => {
-      const res = await api<{ accessToken: string }>("/cms/auth/register", {
+      const res = await api<AuthResponse>("/cms/auth/register", {
         method: "POST",
         body: { username, email, password },
       });
-      applyToken(res.accessToken);
+      applyToken(res.accessToken, !!res.verified);
+      return !!res.verified;
     },
     [applyToken],
   );
+
+  const verifyOtp = useCallback(async (code: string) => {
+    await api<{ verified: boolean }>(
+      `/cms/auth/verify/${encodeURIComponent(code)}`,
+      { method: "POST", auth: true },
+    );
+    setLastVerified(true);
+    setVerified(true);
+  }, []);
+
+  const resendOtp = useCallback(async () => {
+    await api(`/cms/auth/resend`, { method: "GET", auth: true });
+  }, []);
 
   const logout = useCallback(async () => {
     // Tell the server first (needs the bearer + cookie), then clear locally.
@@ -138,6 +177,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, [applyToken, navigate, queryClient]);
 
+  // A 403 from the server's verification filter means "finish verifying",
+  // not "your session died".
+  useEffect(() => {
+    registerVerificationRequiredHandler(() => {
+      setVerified(false);
+      navigate({ to: "/verify", replace: true });
+    });
+  }, [navigate]);
 
 
   const value = useMemo<AuthState>(
@@ -145,13 +192,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       token,
       username: getUsernameFromToken(token),
       isAuthenticated: !!token,
+      verified,
       isLoading,
       login,
       register,
+      verifyOtp,
+      resendOtp,
       logout,
     }),
-    [token, isLoading, login, register, logout],
+    [token, verified, isLoading, login, register, verifyOtp, resendOtp, logout],
   );
+
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
