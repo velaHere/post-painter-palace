@@ -139,13 +139,14 @@ async function refreshToken(): Promise<string | null> {
     try {
       trace("refresh →");
       const res = await doFetch("/cms/auth/refresh", {
-        method: "GET",
+        method: "POST",
         skipRefresh: true,
       });
 
       if (res.status === 401 || res.status === 403) {
         trace("refresh rejected", res.status, "— clearing session");
         setAccessToken(null);
+        lastVerified = null;
         return null;
       }
 
@@ -156,17 +157,21 @@ async function refreshToken(): Promise<string | null> {
 
       const data = (await res.json().catch(() => null)) as {
         accessToken?: string;
+        verified?: boolean;
       } | null;
 
       if (!data?.accessToken || !looksLikeJwt(data.accessToken)) {
         trace("refresh returned no usable token — clearing session");
         setAccessToken(null);
+        lastVerified = null;
         return null;
       }
 
       setAccessToken(data.accessToken);
-      trace("refresh ok");
+      if (typeof data.verified === "boolean") lastVerified = data.verified;
+      trace("refresh ok, verified =", lastVerified);
       return data.accessToken;
+
     } catch (err) {
       // network / CORS failure: do NOT destroy the session
       trace("refresh network error — keeping token", err);
