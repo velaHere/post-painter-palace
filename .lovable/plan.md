@@ -19,10 +19,15 @@ Also:
 - The session WebSocket keeps connecting on token, unchanged.
 
 ### 3. New `/verify` route
-New `src/routes/verify.tsx`: a signed-in-only screen with a 6-digit OTP input, "Verify" button, and a "Resend code" button with a cooldown (the backend rate-limits resends and returns 429 → show a friendly "wait a moment" toast).
-- Error mapping: expired OTP → prompt to resend; invalid code → inline error; too many attempts/requests → 429 message.
+New `src/routes/verify.tsx`: a signed-in-only screen matching the backend's exact limits.
+- 6-digit numeric OTP input (one-time-code input, digits only, auto-submit when full).
+- A 5-minute countdown for the code's validity; when it hits zero the input disables and the screen prompts a resend.
+- "Resend code" button with a 30-second local cooldown timer mirroring the Redis cooldown, so the user sees the wait instead of hitting 429.
+- Attempt feedback: the backend allows 5 attempts per code — the UI counts wrong attempts and, on the 5th, shows "Too many attempts, request a new code" and switches to resend-only.
+- Error mapping from the responses: expired/absent OTP → "Code expired, resend"; invalid code → inline error, decrement remaining attempts; 429 on resend → "You've requested too many codes, try again later" (covers the per-user 5/hour and per-IP 20/hour caps).
 - On success: toast + redirect to `/dashboard`.
 - Own `head()` metadata (title/description/og).
+
 
 ### 4. Gating
 - `src/routes/_authenticated/route.tsx`: after the existing auth check, if `verified === false`, redirect to `/verify` instead of rendering the app. Keeps the current no-flash loading behaviour.
