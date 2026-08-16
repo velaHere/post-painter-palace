@@ -37,6 +37,7 @@ New `src/routes/verify.tsx`: a signed-in-only screen matching the backend's exac
 
 ## Technical notes
 - Files touched: `src/lib/api-client.ts`, `src/lib/auth-context.tsx`, `src/routes/_authenticated/route.tsx`, `src/routes/login.tsx`, `src/components/nav-bar.tsx`; new `src/routes/verify.tsx`.
-- Assumption: OTP is a 6-character code entered as text/digits; adjust if your generator differs.
+- Confirmed from the backend: OTP is exactly 6 digits (`%06d`), valid 5 minutes, 5 verification attempts per code, resend cooldown 30s with 5/hour per user and 20/hour per IP. The UI mirrors these numbers as constants in one place so they stay easy to change.
+
 - The verify/resend endpoints require the bearer token but are exempt from the verification filter, so they work while unverified.
 - No backend changes needed; the refresh cookie path stays `/cms/auth/refresh`.
