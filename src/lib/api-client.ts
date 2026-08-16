@@ -14,16 +14,35 @@ function trace(...args: unknown[]) {
 
 let refreshPromise: Promise<string | null> | null = null;
 let logoutHandler: (() => void) | null = null;
+let verificationHandler: (() => void) | null = null;
+
+/** Last `verified` flag seen from the server (login/register/refresh). */
+let lastVerified: boolean | null = null;
+
+export function getLastVerified(): boolean | null {
+  return lastVerified;
+}
+
+export function setLastVerified(value: boolean | null) {
+  lastVerified = value;
+}
 
 export function registerLogoutHandler(handler: () => void) {
   logoutHandler = handler;
 }
 
+/** Called when the backend refuses a request because the email isn't verified. */
+export function registerVerificationRequiredHandler(handler: () => void) {
+  verificationHandler = handler;
+}
+
 /** Force the shared logout teardown (used by the session socket on LOGOUT). */
 export function forceLogout() {
   setAccessToken(null);
+  lastVerified = null;
   logoutHandler?.();
 }
+
 
 function looksLikeJwt(token: string | null): boolean {
   return !!token && token.split(".").length === 3 && !!decodeToken(token);
