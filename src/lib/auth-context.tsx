@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useRef,
   useMemo,
   useState,
   type ReactNode,
@@ -116,6 +117,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const applyToken = useCallback(
     (newToken: string | null, isVerified: boolean | null = null) => {
+      sessionEpoch.current += 1;
+      setIsLoading(false);
       setAccessToken(newToken);
       setLastVerified(isVerified);
       setToken(newToken);
