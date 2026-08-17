@@ -62,6 +62,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  // Bumped whenever login/register/logout sets the session explicitly, so a
+  // slow bootstrap refresh can never clobber a newer session.
+  const sessionEpoch = useRef(0);
 
   // Synchronous hydration: if a usable token is already in storage, adopt it
   // *before* the browser paints so the UI never flashes a signed-out state.
@@ -76,21 +79,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    const epoch = sessionEpoch.current;
     (async () => {
       const existing = getAccessToken();
       // Already adopted synchronously above — nothing to do.
       if (existing && !isTokenStale(existing)) return;
       const refreshed = await refreshToken();
-      if (!cancelled) {
-        setToken(refreshed);
-        setVerified(getLastVerified());
-        setIsLoading(false);
-      }
+      // A login/register/logout happened while we were waiting: its result wins.
+      if (cancelled || epoch !== sessionEpoch.current) return;
+      setToken(refreshed ?? getAccessToken());
+      setVerified(getLastVerified());
+      setIsLoading(false);
     })();
     return () => {
       cancelled = true;
     };
   }, []);
+
 
   // One session socket per JWT: connect when we have a token, close when we
   // don't. A refresh initiated by the socket itself feeds the new token back.
