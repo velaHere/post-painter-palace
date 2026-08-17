@@ -8,14 +8,14 @@ export const Route = createFileRoute("/_authenticated")({
 });
 
 function AuthenticatedLayout() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, verified } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      navigate({ to: "/login", replace: true });
-    }
-  }, [isAuthenticated, isLoading, navigate]);
+    if (isLoading) return;
+    if (!isAuthenticated) navigate({ to: "/login", replace: true });
+    else if (verified === false) navigate({ to: "/verify", replace: true });
+  }, [isAuthenticated, isLoading, verified, navigate]);
 
   if (isLoading) {
     return (
@@ -25,6 +25,7 @@ function AuthenticatedLayout() {
     );
   }
 
-  if (!isAuthenticated) return null;
+  if (!isAuthenticated || verified === false) return null;
   return <Outlet />;
 }
+
