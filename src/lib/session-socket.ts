@@ -144,10 +144,13 @@ class SessionSocket {
   private async refreshAndReconnect() {
     if (this.refreshing) return;
     this.refreshing = true;
+    const stale = this.token;
     this.teardownSocket();
     try {
       const fresh = await refreshToken();
-      if (!fresh) {
+      // No token, or the same token the server just rejected → reconnecting
+      // would only loop. Treat it as a dead session.
+      if (!fresh || fresh === stale) {
         this.close();
         forceLogout();
         return;
@@ -160,6 +163,7 @@ class SessionSocket {
       this.refreshing = false;
     }
   }
+
 
   private scheduleReconnect() {
     if (this.reconnectTimer || !this.token) return;
