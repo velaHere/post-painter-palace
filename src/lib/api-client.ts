@@ -138,10 +138,21 @@ async function refreshToken(): Promise<string | null> {
   const run = (async (): Promise<string | null> => {
     try {
       trace("refresh →");
-      const res = await doFetch("/cms/auth/refresh", {
+      let res = await doFetch("/cms/auth/refresh", {
         method: "POST",
         skipRefresh: true,
       });
+
+      // Some backend revisions map refresh as GET. A 405 means we guessed the
+      // verb wrong, not that the session is dead — retry with the other one.
+      if (res.status === 405) {
+        trace("refresh POST not allowed — retrying as GET");
+        res = await doFetch("/cms/auth/refresh", {
+          method: "GET",
+          skipRefresh: true,
+        });
+      }
+
 
       if (res.status === 401 || res.status === 403) {
         trace("refresh rejected", res.status, "— clearing session");
