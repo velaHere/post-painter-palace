@@ -40,12 +40,22 @@ export function NavBar() {
             />
           ) : isAuthenticated ? (
             <>
-              <Button asChild variant="ghost" size="sm">
-                <Link to="/dashboard">
-                  <LayoutDashboard className="mr-2 h-4 w-4" />
-                  Dashboard
-                </Link>
-              </Button>
+              {verified === false ? (
+                <Button asChild variant="ghost" size="sm">
+                  <Link to="/verify">
+                    <MailWarning className="mr-2 h-4 w-4" />
+                    Verify email
+                  </Link>
+                </Button>
+              ) : (
+                <Button asChild variant="ghost" size="sm">
+                  <Link to="/dashboard">
+                    <LayoutDashboard className="mr-2 h-4 w-4" />
+                    Dashboard
+                  </Link>
+                </Button>
+              )}
+
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
