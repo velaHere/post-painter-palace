@@ -22,7 +22,7 @@ export const Route = createFileRoute("/login")({
 });
 
 function LoginPage() {
-  const { login, register, isAuthenticated, isLoading } = useAuth();
+  const { login, register, isAuthenticated, isLoading, verified } = useAuth();
   const navigate = useNavigate();
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [username, setUsername] = useState("");
@@ -32,9 +32,12 @@ function LoginPage() {
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      navigate({ to: "/dashboard", replace: true });
+      navigate({
+        to: verified === false ? "/verify" : "/dashboard",
+        replace: true,
+      });
     }
-  }, [isAuthenticated, isLoading, navigate]);
+  }, [isAuthenticated, isLoading, verified, navigate]);
 
   // Don't flash the sign-in form while the session is still resolving, or
   // once we know the user is signed in and about to be redirected.
@@ -51,11 +54,17 @@ function LoginPage() {
     e.preventDefault();
     setSubmitting(true);
     try {
-      if (mode === "login") {
-        await login(email, password);
-      } else {
-        await register(username, email, password);
+      const isVerified =
+        mode === "login"
+          ? await login(email, password)
+          : await register(username, email, password);
+
+      if (!isVerified) {
+        toast.success("Check your email for a verification code");
+        navigate({ to: "/verify", replace: true });
+        return;
       }
+
       toast.success(mode === "login" ? "Welcome back!" : "Account created");
       navigate({ to: "/dashboard" });
     } catch (err) {
@@ -64,6 +73,7 @@ function LoginPage() {
       setSubmitting(false);
     }
   };
+
 
   return (
     <div className="mx-auto flex min-h-[calc(100vh-3.5rem)] max-w-md items-center px-4">

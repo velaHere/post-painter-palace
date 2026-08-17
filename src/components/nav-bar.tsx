@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { LayoutDashboard, LogOut, User } from "lucide-react";
+import { LayoutDashboard, LogOut, MailWarning, User } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,7 +14,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SettingsDialog } from "./settings-dialog";
 
 export function NavBar() {
-  const { isAuthenticated, isLoading, username, logout } = useAuth();
+  const { isAuthenticated, isLoading, username, verified, logout } = useAuth();
 
   const initials = (username ?? "?").slice(0, 2).toUpperCase();
 
@@ -40,12 +40,22 @@ export function NavBar() {
             />
           ) : isAuthenticated ? (
             <>
-              <Button asChild variant="ghost" size="sm">
-                <Link to="/dashboard">
-                  <LayoutDashboard className="mr-2 h-4 w-4" />
-                  Dashboard
-                </Link>
-              </Button>
+              {verified === false ? (
+                <Button asChild variant="ghost" size="sm">
+                  <Link to="/verify">
+                    <MailWarning className="mr-2 h-4 w-4" />
+                    Verify email
+                  </Link>
+                </Button>
+              ) : (
+                <Button asChild variant="ghost" size="sm">
+                  <Link to="/dashboard">
+                    <LayoutDashboard className="mr-2 h-4 w-4" />
+                    Dashboard
+                  </Link>
+                </Button>
+              )}
+
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
