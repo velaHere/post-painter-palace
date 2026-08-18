@@ -121,6 +121,7 @@ async function doFetch(path: string, opts: ApiOptions): Promise<Response> {
     headers,
     body,
     credentials: "include",
+    signal: opts.signal ?? null,
   });
 }
 
