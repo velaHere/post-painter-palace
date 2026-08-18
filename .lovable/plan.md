@@ -54,11 +54,21 @@ protected layout while state is still settling.
 - `src/routes/_authenticated/route.tsx`, `src/routes/login.tsx` — single-owner
   redirect so no route bounces the user mid-transition.
 
-## One question for you (does not block this fix)
+## Why the socket rejects the token
 
-The socket is rejecting the token even though the same token works for REST. To
-also fix that root cause, I need the exact JSON shape your
-`SessionWebSocketHandler` expects for the AUTH frame — the client currently sends
-`{"type":"AUTH","token":"<jwt>"}`. If your handler expects a different field name
-(e.g. `accessToken`, or `Bearer <jwt>`), tell me and I'll match it in the same
-change; any backend log line printed when AUTH fails would also pin it down.
+Your handler expects exactly `{"type":"AUTH","token":"<jwt>"}`, which is what the
+client already sends — so the frame shape is fine. `AUTH_FAILED` therefore comes
+from `isTokenExpiredOrInvalid`, i.e. the client opened the socket with a token
+that was already stale (typical during first load, before/while the bootstrap
+refresh runs). Two client-side changes address it:
+
+- **Never open the socket with a stale token.** Refresh first if the stored token
+  is inside the expiry window, and connect only with a token that just passed the
+  freshness check.
+- **Refresh before reconnecting, once.** On `AUTH_FAILED` the client refreshes and
+  reconnects a single time; if the socket still fails it backs off quietly and
+  leaves the REST session untouched.
+
+Also, since your handler closes unauthenticated sockets after 5 seconds, the
+client will send `{"type":"PING"}` on an interval and treat `PONG` as liveness, so
+idle sockets stay healthy instead of silently dying and reconnecting.
