@@ -182,9 +182,11 @@ async function refreshToken(): Promise<string | null> {
       return data.accessToken;
 
     } catch (err) {
-      // network / CORS failure: do NOT destroy the session
+      // network / CORS / timeout failure: do NOT destroy the session
       trace("refresh network error — keeping token", err);
       return getAccessToken();
+    } finally {
+      clearTimeout(timer);
     }
   })();
 
