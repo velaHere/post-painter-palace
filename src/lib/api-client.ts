@@ -121,13 +121,17 @@ async function doFetch(path: string, opts: ApiOptions): Promise<Response> {
     headers,
     body,
     credentials: "include",
+    signal: opts.signal ?? null,
   });
 }
 
+/** Refresh must never hang the boot sequence. */
+const REFRESH_TIMEOUT_MS = 6_000;
+
 /**
  * Single-flight refresh.
- * Only a real 401/403 clears the session — network errors and 5xx keep the
- * existing token so a flaky connection can't silently sign the user out.
+ * Only a real 401/403 clears the session — network errors, timeouts and 5xx keep
+ * the existing token so a flaky connection can't silently sign the user out.
  */
 async function refreshToken(): Promise<string | null> {
   if (refreshPromise) {
@@ -136,25 +140,20 @@ async function refreshToken(): Promise<string | null> {
   }
 
   const run = (async (): Promise<string | null> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
     try {
       trace("refresh →");
-      let res = await doFetch("/cms/auth/refresh", {
+      // The backend maps refresh as POST only. Never retry with another verb:
+      // it just produces 405 noise in the server log.
+      const res = await doFetch("/cms/auth/refresh", {
         method: "POST",
         skipRefresh: true,
+        signal: controller.signal,
       });
 
-      // Some backend revisions map refresh as GET. A 405 means we guessed the
-      // verb wrong, not that the session is dead — retry with the other one.
-      if (res.status === 405) {
-        trace("refresh POST not allowed — retrying as GET");
-        res = await doFetch("/cms/auth/refresh", {
-          method: "GET",
-          skipRefresh: true,
-        });
-      }
-
-
       if (res.status === 401 || res.status === 403) {
+
         trace("refresh rejected", res.status, "— clearing session");
         setAccessToken(null);
         lastVerified = null;
@@ -184,9 +183,11 @@ async function refreshToken(): Promise<string | null> {
       return data.accessToken;
 
     } catch (err) {
-      // network / CORS failure: do NOT destroy the session
+      // network / CORS / timeout failure: do NOT destroy the session
       trace("refresh network error — keeping token", err);
       return getAccessToken();
+    } finally {
+      clearTimeout(timer);
     }
   })();
 
