@@ -54,11 +54,16 @@ function VerifyPage() {
   const [resending, setResending] = useState(false);
   const submittedFor = useRef<string | null>(null);
 
+  // Only three states may act: signed out → /login, verified → /dashboard,
+  // unverified → this page. `verified === null` waits for the server answer.
   useEffect(() => {
     if (isLoading) return;
     if (!isAuthenticated) navigate({ to: "/login", replace: true });
-    else if (verified) navigate({ to: "/dashboard", replace: true });
+    else if (verified === true) navigate({ to: "/dashboard", replace: true });
   }, [isAuthenticated, isLoading, verified, navigate]);
+
+  const ready = !isLoading && isAuthenticated && verified === false;
+
 
   // Code validity countdown (backend expires the OTP after 5 minutes).
   useEffect(() => {
