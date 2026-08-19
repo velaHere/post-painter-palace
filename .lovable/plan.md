@@ -56,4 +56,4 @@ Because verify returns no token, the old token keeps its pre-verification claims
 ## Technical notes
 
 - Files: `src/lib/api-client.ts`, `src/lib/auth-context.tsx`, `src/lib/session-socket.ts`, `src/routes/verify.tsx`, `src/routes/login.tsx`, `src/routes/_authenticated/route.tsx`, `src/routes/index.tsx`, `src/components/nav-bar.tsx`.
-- No backend changes here. `UserService.markVerified` must be fixed on your side (null user passed to the cache-evict key) before verification can ever return 200.
+- No backend changes needed now that verify returns 200 with `{ verified }`; the frontend treats that body as the answer and uses refresh to pick up the matching token.
