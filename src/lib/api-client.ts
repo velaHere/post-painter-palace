@@ -55,7 +55,7 @@ export function registerVerificationRequiredHandler(handler: () => void) {
 /** Force the shared logout teardown (used by the session socket on LOGOUT). */
 export function forceLogout() {
   setAccessToken(null);
-  lastVerified = null;
+  setLastVerified(null);
   logoutHandler?.();
 }
 
@@ -172,7 +172,7 @@ async function refreshToken(): Promise<string | null> {
 
         trace("refresh rejected", res.status, "— clearing session");
         setAccessToken(null);
-        lastVerified = null;
+        setLastVerified(null);
         return null;
       }
 
@@ -189,12 +189,12 @@ async function refreshToken(): Promise<string | null> {
       if (!data?.accessToken || !looksLikeJwt(data.accessToken)) {
         trace("refresh returned no usable token — clearing session");
         setAccessToken(null);
-        lastVerified = null;
+        setLastVerified(null);
         return null;
       }
 
       setAccessToken(data.accessToken);
-      if (typeof data.verified === "boolean") lastVerified = data.verified;
+      if (typeof data.verified === "boolean") setLastVerified(data.verified);
       trace("refresh ok, verified =", lastVerified);
       return data.accessToken;
 
@@ -270,7 +270,7 @@ export async function api<T = unknown>(
     // "Email verification required" body — that's not a dead session.
     if (res.status === 403 && /verification/i.test(message)) {
       trace("email verification required for", path);
-      lastVerified = false;
+      setLastVerified(false);
       verificationHandler?.();
     }
     throw new ApiError(res.status, message, payload);
