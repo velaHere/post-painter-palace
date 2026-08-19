@@ -44,7 +44,8 @@ interface AuthState {
     email: string,
     password: string,
   ) => Promise<boolean>;
-  verifyOtp: (code: string) => Promise<void>;
+  /** Resolves to the server's `verified` answer for the submitted code. */
+  verifyOtp: (code: string) => Promise<boolean>;
   resendOtp: () => Promise<void>;
   logout: () => Promise<void>;
 }
