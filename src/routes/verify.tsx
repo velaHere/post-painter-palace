@@ -84,12 +84,18 @@ function VerifyPage() {
   const inputDisabled = submitting || expired || blocked;
 
   const submit = async (value: string) => {
-    if (value.length !== OTP_LENGTH || inputDisabled) return;
+    if (value.length !== OTP_LENGTH || inputDisabled || !ready) return;
     submittedFor.current = value;
     setSubmitting(true);
     setError(null);
     try {
-      await verifyOtp(value);
+      const ok = await verifyOtp(value);
+      if (!ok) {
+        setAttemptsLeft((n) => Math.max(0, n - 1));
+        setError("That code isn't right.");
+        setCode("");
+        return;
+      }
       toast.success("Email verified");
       navigate({ to: "/dashboard", replace: true });
     } catch (err) {
@@ -105,6 +111,8 @@ function VerifyPage() {
       } else if (status === 401 || /invalid|credential/i.test(message)) {
         setAttemptsLeft((n) => Math.max(0, n - 1));
         setError("That code isn't right.");
+      } else if (status >= 500) {
+        setError("Verification failed on the server. Try again in a moment.");
       } else {
         setError(message);
       }
@@ -124,7 +132,7 @@ function VerifyPage() {
   };
 
   const handleResend = async () => {
-    if (cooldown > 0 || resending) return;
+    if (cooldown > 0 || resending || !ready) return;
     setResending(true);
     try {
       await resendOtp();
@@ -148,7 +156,7 @@ function VerifyPage() {
     }
   };
 
-  if (isLoading || !isAuthenticated || verified) {
+  if (!ready) {
     return (
       <div className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center text-sm text-muted-foreground">
         Loading…
