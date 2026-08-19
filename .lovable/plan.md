@@ -1,32 +1,42 @@
 # Fix the verification/session state bugs
 
-## What is confirmed from your backend log
+## What the backend contract gives us
 
-- Every `POST /cms/auth/verify/{code}` in the log ends in a **500** inside `AuthService.verify` (line 168) → `UserService.markVerified`: `EL1007E: Property or field 'username' cannot be found on null`. That is a backend cache-key bug (`@CacheEvict(key = "#user.username")` with a null user). The frontend cannot make a 500 succeed — you need to fix that method, otherwise verification will keep failing server-side even after the UI is correct.
-- The log also shows the WebSocket connecting and disconnecting every ~5–25 seconds all session long, i.e. the socket never stays authenticated. That churn is a real frontend/transport problem worth fixing in the same pass.
-- The verify/resend requests in the log were sent by an already-verified account, which confirms the `/verify` page is reachable and interactive when it should not be.
+- `POST /cms/auth/verify/{code}` returns `{ "verified": true|false }` and **401** when the bearer is missing/unusable. It does **not** return a new access token.
+- `POST /cms/auth/refresh` returns `{ accessToken, verified }` — this is the only endpoint that hands back both a fresh token and the authoritative `verified` flag.
+- Confirmed in your log: the `/verify` page was reachable and interactive for an already-verified account, which is what let it fire verify/resend requests it should never have sent. The WebSocket also connects and disconnects every ~5–25 s for the whole session, i.e. it never stays authenticated.
 
-The exact cause of "verify succeeds then I land on /login" is **not** confirmed yet (the log only shows 500s, not a success path). The plan therefore starts by reproducing it with tracing, then applies the state fixes below.
+Because verify returns no token, the old token keeps its pre-verification claims. That is the core of the "verified, then bounced to /login" bug: the next protected call goes out with a stale token, gets rejected, and the generic rejection path clears the session and sends the user to `/login` — while the refresh cookie is still valid, which is exactly why a manual reload then lands you on the dashboard.
 
 ## The state problems in the frontend
 
-1. **`verified` is module-level memory, not derived truth.** `lastVerified` lives in `api-client.ts` and resets to `null` on every page load. `null` means "unknown", but `/verify` renders its form for `verified !== true`, so a fully verified user who opens `/verify` gets a working OTP form and can fire verify/resend requests. Same weakness the other way: `_authenticated` lets a possibly-unverified user through while `verified` is `null`.
-2. **Nothing re-syncs the session after verification.** `verifyOtp` only flips local state; the access token still carries the pre-verification claims, so the next protected request can be rejected and bounce the user.
-3. **Any hard bounce goes to `/login`.** Both the logout handler and the socket `LOGOUT` path clear the token and navigate to `/login`, so a single transient rejection right after verifying looks exactly like "I verified and got logged out" — while the refresh cookie is still valid, which is why a manual reload then drops you on the dashboard.
+1. **`verified` is module-level memory, not derived truth.** `lastVerified` lives in `api-client.ts` and resets to `null` on every page load. `null` means "unknown", but `/verify` renders its form whenever `verified !== true`, so a verified user who types `/verify` gets a live OTP form. `_authenticated` has the mirror-image hole: it admits a possibly-unverified user while `verified` is `null`.
+2. **Nothing re-syncs the session after verification** — see the token/claims gap above.
+3. **Every hard bounce goes to `/login`,** so an unverified or merely stale session is indistinguishable from a dead one.
 
 ## The fix
 
 **Single source of truth for `verified`**
-- Treat `verified` as a three-state value that is only ever set from a server answer (login, register, refresh, verify) and re-fetch it on boot instead of assuming.
-- On app boot, always resolve the session through refresh before deciding anything, and keep `isLoading` true until `verified` is known (with the existing 1.2 s safety timeout so the UI can never hang).
+- `verified` stays a three-state value (`true` / `false` / `null` = unknown) and is only ever written from a server answer: login, register, refresh, verify.
+- On boot, resolve the session through refresh and keep `isLoading` true until `verified` is known (existing 1.2 s safety timeout stays, so the UI can never hang).
+- Persist the last known `verified` alongside the token so a reload starts from the previous answer instead of `null`, then confirm it with refresh.
 
 **`/verify` becomes strictly conditional**
-- Render the OTP form only when `verified === false`. `null`/`true`/unauthenticated states render the resolving/redirecting placeholder, never inputs and never buttons that can fire requests.
-- Disable submit and resend while the session state is unresolved, so no request can leave the page before the app knows the user is unverified.
+- The OTP form renders only when `isAuthenticated && verified === false`. `null`, `true`, and signed-out states render the resolving/redirecting placeholder — no inputs, no resend button, so zero requests can leave the page.
+- If `verified` is `null` on entry, the page waits for the refresh answer before deciding, instead of assuming "unverified".
+- Submit and resend are additionally guarded in their handlers, so a stale click can't fire after the state flips.
 
-**Post-verification handoff without a bounce**
-- After a successful verify: mark verified, refresh the access token so the new token carries verified claims, then navigate to `/dashboard`.
-- If verify returns a 5xx (your current backend bug), show a clear "verification failed on the server" error and keep the user on `/verify` with the code cleared — never navigate, never sign out.
+**Post-verification handoff (given the `{verified}`-only response)**
+1. `POST /cms/auth/verify/{code}` → read `verified` from the body; treat `verified === false` as a failed attempt (decrement attempts, stay on the page).
+2. On `verified === true`: set local state, then **await a refresh** so the access token carries verified claims and the server-reported `verified` is adopted.
+3. Only after that refresh resolves, navigate to `/dashboard`. If the refresh fails transiently, keep the session and the verified state and still navigate — the dashboard's own retry path handles it — but never sign out.
+4. A 401 from verify means the bearer was unusable: refresh once and retry the code once, and only surface a session error if that also fails.
+5. A 5xx from verify shows a clear server-side error and keeps the user on `/verify` with the code cleared.
+
+**Never sign out on a recoverable rejection**
+- Only a refresh that is itself rejected (401/403 on `/cms/auth/refresh`) or a server `LOGOUT` frame ends the session. Everything else keeps the token.
+- Two distinct destinations: session dead → `/login`; session alive but unverified → `/verify`.
+
 
 **Never sign out on a recoverable rejection**
 - A 401 that a refresh can recover from must not clear the session. Only a refresh that is explicitly rejected (401/403 on refresh itself) or a server `LOGOUT` ends the session.
@@ -46,4 +56,4 @@ The exact cause of "verify succeeds then I land on /login" is **not** confirmed 
 ## Technical notes
 
 - Files: `src/lib/api-client.ts`, `src/lib/auth-context.tsx`, `src/lib/session-socket.ts`, `src/routes/verify.tsx`, `src/routes/login.tsx`, `src/routes/_authenticated/route.tsx`, `src/routes/index.tsx`, `src/components/nav-bar.tsx`.
-- No backend changes here. `UserService.markVerified` must be fixed on your side (null user passed to the cache-evict key) before verification can ever return 200.
+- No backend changes needed now that verify returns 200 with `{ verified }`; the frontend treats that body as the answer and uses refresh to pick up the matching token.
