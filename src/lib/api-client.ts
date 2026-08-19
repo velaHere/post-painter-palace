@@ -3,6 +3,7 @@ import { isTokenExpired, decodeToken } from "./jwt";
 
 const TOKEN_KEY = "gramstore.accessToken.v2";
 const LEGACY_TOKEN_KEY = "gramstore.accessToken";
+const VERIFIED_KEY = "gramstore.verified.v1";
 
 /** Refresh a bit before actual expiry so in-flight requests never arrive stale. */
 const EXPIRY_SKEW_MS = 30_000;
@@ -16,8 +17,19 @@ let refreshPromise: Promise<string | null> | null = null;
 let logoutHandler: (() => void) | null = null;
 let verificationHandler: (() => void) | null = null;
 
-/** Last `verified` flag seen from the server (login/register/refresh). */
+/** Last `verified` flag seen from the server (login/register/refresh/verify). */
 let lastVerified: boolean | null = null;
+
+function readStoredVerified(): boolean | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.localStorage.getItem(VERIFIED_KEY);
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return null;
+}
+
+// Start from the last server answer so a reload doesn't begin at "unknown".
+if (typeof window !== "undefined") lastVerified = readStoredVerified();
 
 export function getLastVerified(): boolean | null {
   return lastVerified;
@@ -25,7 +37,11 @@ export function getLastVerified(): boolean | null {
 
 export function setLastVerified(value: boolean | null) {
   lastVerified = value;
+  if (typeof window === "undefined") return;
+  if (value === null) window.localStorage.removeItem(VERIFIED_KEY);
+  else window.localStorage.setItem(VERIFIED_KEY, String(value));
 }
+
 
 export function registerLogoutHandler(handler: () => void) {
   logoutHandler = handler;
@@ -39,7 +55,7 @@ export function registerVerificationRequiredHandler(handler: () => void) {
 /** Force the shared logout teardown (used by the session socket on LOGOUT). */
 export function forceLogout() {
   setAccessToken(null);
-  lastVerified = null;
+  setLastVerified(null);
   logoutHandler?.();
 }
 
@@ -156,7 +172,7 @@ async function refreshToken(): Promise<string | null> {
 
         trace("refresh rejected", res.status, "— clearing session");
         setAccessToken(null);
-        lastVerified = null;
+        setLastVerified(null);
         return null;
       }
 
@@ -173,12 +189,12 @@ async function refreshToken(): Promise<string | null> {
       if (!data?.accessToken || !looksLikeJwt(data.accessToken)) {
         trace("refresh returned no usable token — clearing session");
         setAccessToken(null);
-        lastVerified = null;
+        setLastVerified(null);
         return null;
       }
 
       setAccessToken(data.accessToken);
-      if (typeof data.verified === "boolean") lastVerified = data.verified;
+      if (typeof data.verified === "boolean") setLastVerified(data.verified);
       trace("refresh ok, verified =", lastVerified);
       return data.accessToken;
 
@@ -254,7 +270,7 @@ export async function api<T = unknown>(
     // "Email verification required" body — that's not a dead session.
     if (res.status === 403 && /verification/i.test(message)) {
       trace("email verification required for", path);
-      lastVerified = false;
+      setLastVerified(false);
       verificationHandler?.();
     }
     throw new ApiError(res.status, message, payload);
