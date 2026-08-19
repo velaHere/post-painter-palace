@@ -107,6 +107,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // `verified` must always come from a server answer. If we're signed in but
+  // the flag is still unknown, resolve it once through refresh so no route has
+  // to guess (and /verify never shows its form on a hunch).
+  const resolvingVerified = useRef(false);
+  useEffect(() => {
+    if (isLoading || !token || verified !== null) return;
+    if (resolvingVerified.current) return;
+    resolvingVerified.current = true;
+    const epoch = sessionEpoch.current;
+    (async () => {
+      try {
+        const fresh = await refreshToken();
+        if (epoch !== sessionEpoch.current) return;
+        if (fresh) setToken(fresh);
+        setVerified(getLastVerified());
+      } finally {
+        resolvingVerified.current = false;
+      }
+    })();
+  }, [token, verified, isLoading]);
+
 
   // One session socket per JWT: connect when we have a token, close when we
   // don't. A refresh initiated by the socket itself feeds the new token back.
@@ -118,11 +139,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => sessionSocket.setTokenListener(null);
   }, []);
 
+  // An unverified session can't use the socket (the server rejects it), so
+  // don't churn connections until the account is verified.
   useEffect(() => {
     if (isLoading) return;
-    if (token) sessionSocket.connect(token);
+    if (token && verified !== false) sessionSocket.connect(token);
     else sessionSocket.close();
-  }, [token, isLoading]);
+  }, [token, verified, isLoading]);
+
+
 
 
   const applyToken = useCallback(
