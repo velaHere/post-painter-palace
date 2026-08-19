@@ -66,7 +66,7 @@ function LoginPage() {
       }
 
       toast.success(mode === "login" ? "Welcome back!" : "Account created");
-      navigate({ to: "/dashboard" });
+      navigate({ to: "/dashboard", replace: true });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Authentication failed");
     } finally {
