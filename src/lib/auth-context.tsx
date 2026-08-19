@@ -81,10 +81,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     const epoch = sessionEpoch.current;
+
+    const existing = getAccessToken();
+    // Already adopted synchronously above — nothing to do.
+    if (existing && !isTokenStale(existing)) return;
+
+    // Never let a slow/unreachable backend hold the UI on "Loading…".
+    const settle = setTimeout(() => {
+      if (!cancelled && epoch === sessionEpoch.current) setIsLoading(false);
+    }, 1_200);
+
     (async () => {
-      const existing = getAccessToken();
-      // Already adopted synchronously above — nothing to do.
-      if (existing && !isTokenStale(existing)) return;
       const refreshed = await refreshToken();
       // A login/register/logout happened while we were waiting: its result wins.
       if (cancelled || epoch !== sessionEpoch.current) return;
@@ -92,8 +99,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setVerified(getLastVerified());
       setIsLoading(false);
     })();
+
     return () => {
       cancelled = true;
+      clearTimeout(settle);
     };
   }, []);
 
