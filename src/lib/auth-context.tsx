@@ -162,13 +162,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const verifyOtp = useCallback(async (code: string) => {
-    await api<{ verified: boolean }>(
+    const res = await api<{ verified?: boolean }>(
       `/cms/auth/verify/${encodeURIComponent(code)}`,
       { method: "POST", auth: true },
     );
+    // The endpoint answers { verified } and never returns a token, so a wrong
+    // code comes back as 200 + verified:false — that's a failed attempt.
+    if (res?.verified === false) return false;
+
     setLastVerified(true);
     setVerified(true);
+    // The current access token still carries pre-verification claims: refresh
+    // so the next protected request isn't rejected (which used to look like a
+    // surprise sign-out). A transient refresh failure keeps the session.
+    const fresh = await refreshToken();
+    if (fresh) {
+      setToken(fresh);
+      if (getLastVerified() === false) {
+        // Server disagrees — trust it rather than our optimistic flag.
+        setVerified(false);
+        return false;
+      }
+      setLastVerified(true);
+      setVerified(true);
+    }
+    return true;
   }, []);
+
 
   const resendOtp = useCallback(async () => {
     await api(`/cms/auth/resend`, { method: "GET", auth: true });
