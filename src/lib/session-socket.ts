@@ -16,7 +16,7 @@ const MAX_BACKOFF_MS = 15_000;
 /** Give up quietly after this many consecutive failures. */
 const MAX_ATTEMPTS = 6;
 /** The server closes unauthenticated/idle sockets, so keep it warm. */
-const PING_INTERVAL_MS = 25_000;
+const PING_INTERVAL_MS = 20_000;
 
 function getSocketUrl(): string {
   const base = getApiBaseUrl().replace(/\/+$/, "");
